@@ -1,0 +1,28 @@
+{
+  "images_dir": "/kaggle/input/oxford-iiit-pet/images",
+  "mask_dir": "/kaggle/input/oxford-iiit-pet/annotations/trimaps",
+  "checkpoint_dir": "/kaggle/working/checkpoints_unet",
+  "best_model_dir": "/kaggle/working/best_model_unet",
+
+  "img_size": 224,
+  "max_samples": null,
+  "split_size": 0.85,
+  "cache_ram": true,
+
+  "batch_size": 16,
+  "max_iterations": 50,
+  "lr": 0.001,
+  "weight_decay": 0.0001,
+  "grad_clip": 1.0,
+  "accum_steps": 2,
+  "patience": 10,
+  "min_delta": 0.0001,
+  "resume": null,
+  "save_every": 5,
+
+  "bce_weight": 0.4,
+  "dice_weight": 0.4,
+  "kl_weight": 0.2,
+
+  "num_workers": 4
+}

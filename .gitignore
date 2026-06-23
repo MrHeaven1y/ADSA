@@ -1,0 +1,16 @@
+# Node.js dependencies
+node_modules/
+
+# Build outputs
+dist/
+
+# PyTorch model weights
+*.pth
+
+# Checkpoint directories/files
+checkpoint_*
+checkpoint_*/
+
+# Best model directories/files
+best_model_*
+best_model_*/

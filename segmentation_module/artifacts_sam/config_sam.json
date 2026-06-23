@@ -1,0 +1,30 @@
+{
+  "images_dir": "/kaggle/input/oxford-iiit-pet/images",
+  "mask_dir": "/kaggle/input/oxford-iiit-pet/annotations/trimaps",
+  "checkpoint_dir": "/kaggle/working/checkpoints_sam",
+  "best_model_dir": "/kaggle/working/best_model_sam",
+
+  "sam_model_type": "vit_t",
+  "sam_checkpoint": "/kaggle/input/models/dibyenducontroversy/mobile-sam/pytorch/default/1/mobile_sam.pt",
+
+  "img_size": 224,
+  "max_samples": null,
+  "split_size": 0.85,
+  "cache_ram": true,
+
+  "batch_size": 8,
+  "max_iterations": 40,
+  "lr": 0.00005,
+  "weight_decay": 0.0001,
+  "grad_clip": 1.0,
+  "accum_steps": 4,
+  "patience": 10,
+  "min_delta": 0.0001,
+  "resume": null,
+  "save_every": 5,
+
+  "bce_weight": 0.5,
+  "dice_weight": 0.5,
+
+  "num_workers": 4
+}

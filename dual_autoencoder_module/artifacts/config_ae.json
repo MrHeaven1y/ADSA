@@ -1,0 +1,30 @@
+{
+  "images_dir": "",
+  "mask_dir": "",
+  "checkpoint_dir": "/kaggle/working/checkpoints",
+  "best_model_dir": "/kaggle/working/best_model",
+
+  "img_size": 224,
+  "max_samples": null,
+  "split_size": 0.85,
+  "cache_ram": false,
+  "max_cache_size": 0,
+
+  "latent_channels": 256,
+
+  "batch_size": 16,
+  "max_iterations": 60,
+  "lr": 0.0002,
+  "weight_decay": 0.00001,
+  "grad_clip": 1.0,
+  "accum_steps": 1,
+  "patience": 8,
+  "min_delta": 0.000001,
+  "resume": null,
+  "save_every": 10,
+
+  "lambda_l1": 1.0,
+  "lambda_perceptual": 0.1,
+
+  "num_workers": 4
+}

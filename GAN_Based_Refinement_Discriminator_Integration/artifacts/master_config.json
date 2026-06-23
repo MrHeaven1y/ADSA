@@ -1,0 +1,26 @@
+{
+  "stage4_gan": {
+    "images_dir": "/kaggle/working/clean_pet_data/images",
+    "mask_dir": "/kaggle/working/clean_pet_data/masks",
+    "checkpoint_dir": "/kaggle/working/checkpoints_gan",
+    "best_model_dir": "/kaggle/working/best_model_gan",
+    "ae_weights": "/kaggle/input/models/mrheavenly/ae-model/pytorch/default/1/best_weights_ae.pth",
+    "ext_weights": "/kaggle/input/models/mrheavenly/ext-weights1/pytorch/default/1/best_weights.pth",
+    "img_size": 224,
+    "num_workers": 4,
+    "batch_size": 4,
+    "max_iterations": 60,
+    "lr_g": 0.0001,
+    "lr_d": 5e-05,
+    "weight_decay": 0.0001,
+    "accum_steps": 4,
+    "lambda_l1": 10.0,
+    "lambda_ext": 5.0,
+    "lambda_gan": 1.0,
+    "attack_p": 0.8,
+    "attack_warmup_epochs": 2,
+    "patience": 15,
+    "min_delta": 0.0001,
+    "save_every": 5
+  }
+}
