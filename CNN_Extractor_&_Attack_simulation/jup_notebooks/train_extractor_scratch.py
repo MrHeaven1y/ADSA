@@ -1245,6 +1245,12 @@ def train_ddp(rank, world_size, config):
         current_lr = optimizer.param_groups[0]['lr']
         scheduler.step()
 
+        if itr >= 40:
+            # param_groups[1] --> the head; param_groups[0] is the backbone
+            optimizer.param_groups[1]['lr'] = 5e-5 # head is good
+            optimizer.param_groups[0]['lr'] = 5e-6 # backbone slow
+            current_lr = optimizer.param_groups[1]['lr']
+
         keys = ['loss_spatial', 'loss_global', 'loss_latent', 'loss_identity']
         metrics = torch.tensor(
             [train_loss] + [train_bd[k] for k in keys] + [float(train_n),

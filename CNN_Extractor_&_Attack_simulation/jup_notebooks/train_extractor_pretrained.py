@@ -590,8 +590,8 @@ class ForensicIntegrityAnalyzer(nn.Module):
         self.arc_margin = 0.5
         self.arc_scale = 64.0
 
-        self.identity_centers = nn.Parameter(torch.randn(self.num_ids, fp_dim))
-        nn.init.xavier_uniform_(self.identity_centers)
+        init = torch.linalg.qr(torch.randn(fp_dim, self.num_ids))[0].T
+        self.identity_centers = nn.Parameter(init)
 
         self.identity_pool = GeMPooling()
         self.feat_dropout = nn.Dropout2d(p=0.03)
@@ -1078,7 +1078,7 @@ def train_ddp(rank, world_size, config):
                     if itr < phase_2_start:
                         # PHASE 1: Spatial & Global ONLY
                         id_weight = 0.0
-                        latent_weight = 0.0
+                        latent_weight = 0.05
                     
                     elif itr < phase_3_start:
                         # PHASE 2: Add ArcFace Metric Geometry
@@ -1251,7 +1251,7 @@ def train_ddp(rank, world_size, config):
                     if itr < phase_2_start:
                         # PHASE 1: Spatial & Global ONLY
                         id_weight = 0.0
-                        latent_weight = 0.0
+                        latent_weight = 0.05
                     
                     elif itr < phase_3_start:
                         # PHASE 2: Add ArcFace Metric Geometry
@@ -1286,6 +1286,12 @@ def train_ddp(rank, world_size, config):
         current_lr = optimizer.param_groups[0]['lr']
         scheduler.step()
 
+        if itr >= 40:
+            # param_groups[1] --> the head; param_groups[0] is the backbone
+            optimizer.param_groups[1]['lr'] = 5e-5
+            optimizer.param_groups[0]['lr'] = 5e-6
+            current_lr = optimizer.param_groups[1]['lr']
+            
         keys = ['loss_spatial', 'loss_global', 'loss_latent', 'loss_identity']
         metrics = torch.tensor(
             [train_loss] + [train_bd[k] for k in keys] + [float(train_n),
