@@ -135,6 +135,7 @@ class TransformedDataset(Dataset):
             img, mask = self.transform(img, mask)
         return img, mask
 
+
 def split_dataset(img_dir, mask_dir, train_tf, val_tf,
                   max_samples=None, split_size=0.85, cache_ram=True):
     dataset = OxfordPetDataset(img_dir, mask_dir, transforms=None,
@@ -144,9 +145,26 @@ def split_dataset(img_dir, mask_dir, train_tf, val_tf,
     train_sub, val_sub = random_split(dataset, [n_train, n_val])
     return TransformedDataset(train_sub, train_tf), TransformedDataset(val_sub, val_tf)
 
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  SS INJECTOR
 # ══════════════════════════════════════════════════════════════════════════════
+
+def get_mode_weights(epoch, max_epochs):
+    """Progressive curriculum - start easy, add harder modes later"""
+    if epoch < max_epochs * 0.25:
+        # Early: mostly clean attacked, some tampered, no fake
+        return torch.tensor([0.50, 0.30, 0.00, 0.10, 0.10])
+    elif epoch < max_epochs * 0.50:
+        # Mid: introduce fake watermarks
+        return torch.tensor([0.30, 0.25, 0.20, 0.15, 0.10])
+    elif epoch < max_epochs * 0.75:
+        # Late: more identity confusion
+        return torch.tensor([0.20, 0.20, 0.30, 0.15, 0.15])
+    else:
+        # Final: balanced with emphasis on hard cases
+        return torch.tensor([0.15, 0.20, 0.30, 0.20, 0.15])
 
 def generate_hybrid_chaotic_watermark(latent_channels, latent_h, latent_w, secret_key, cache_dir="/kaggle/working/wm_cache"):
     os.makedirs(cache_dir, exist_ok=True)
@@ -580,15 +598,21 @@ class ForensicIntegrityAnalyzer(nn.Module):
         
         # 4. Heads updated for new routing
         # Global detector still looks at the deepest layer (512 ch)
-        self.detector_head = nn.Sequential(GeMPooling(), nn.Linear(512, 128), nn.GELU(), nn.Linear(128, 4))
+        self.detector_head = nn.Sequential(
+            GeMPooling(),
+            nn.Dropout(p=0.1),
+            nn.Linear(512, 128), 
+            nn.GELU(), 
+            nn.Linear(128, 4)
+        )
         
         # nn.Conv2d(in_channels, out_channels, kernel, stride, padding)
         self.latent_mean = nn.Conv2d(128, 256, 3, 1, 1)
         self.latent_logvar = nn.Conv2d(128, 256, 3, 1, 1)
         
         self.num_ids = fp_dim
-        self.arc_margin = 0.5
-        self.arc_scale = 64.0
+        self.arc_margin = 0.2
+        self.arc_scale = 32.0
 
         init = torch.linalg.qr(torch.randn(fp_dim, self.num_ids))[0].T
         self.identity_centers = nn.Parameter(init)
@@ -665,7 +689,7 @@ class ForensicInfoNCELoss(nn.Module):
     def __init__(self, temperature=0.1):
         super().__init__()
         self.bce = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([3.0]))        
-        self.ce = nn.CrossEntropyLoss()
+        self.ce = nn.CrossEntropyLoss(label_smoothing=0.1)
         self.temperature = temperature
 
 
@@ -680,7 +704,7 @@ class ForensicInfoNCELoss(nn.Module):
         gy = F.conv2d(x, self.sobel_y, padding=1)
         return torch.sqrt(gx**2 + gy**2 + 1e-6)
     
-    def forward(self, pred_int, gt_int, pred_glob, gt_glob, z_mean, z_logvar, gt_latent, pred_fp, identity_labels, extractor, current_epoch=0, latent_weight=1.0, id_weight=1.0, max_epochs=80):
+    def forward(self, pred_int, gt_int, pred_glob, gt_glob, z_mean, z_logvar, gt_latent, pred_fp, identity_labels, extractor, current_epoch=0, latent_weight=1.0, id_weight=1.0, collapse_weight=0.1, max_epochs=80):
         
         loss_spatial_bce = self.bce(pred_int, gt_int)
         
@@ -689,14 +713,18 @@ class ForensicInfoNCELoss(nn.Module):
         
         intersection = (pred_sigmoid * gt_int).sum(dim=(2,3))
         union = pred_sigmoid.sum(dim=(2,3)) + gt_int.sum(dim=(2,3))
-        loss_dice = 1.0 - (2.0 * intersection + 1e-5) / (union + 1e-5)
         
+        has_temper = (gt_int.sum(dim=[2,3]) > 0).float()
+        loss_dice_raw = 1.0 - (2.0 * intersection + 1e-5) / (union + 1e-5)
+
+        loss_dice = (loss_dice_raw * has_temper).sum() / (has_temper.sum() + 1e-6)
+
         pred_edge = self._sobel_edges(pred_sigmoid)
         gt_edge = self._sobel_edges(gt_int)
         loss_edge = F.l1_loss(pred_edge, gt_edge)
 
 
-        loss_spatial = loss_spatial_bce + loss_dice.mean() + (0.1 * loss_edge)
+        loss_spatial = loss_spatial_bce + loss_dice + (0.1 * loss_edge)
         loss_global  = self.ce(pred_glob, gt_glob)
         
         pred_latent = z_mean
@@ -752,10 +780,14 @@ class ForensicInfoNCELoss(nn.Module):
         arc_logits = extractor.compute_arcface_logits(features, identity_labels)
         loss_arc = F.cross_entropy(arc_logits, identity_labels)
 
+        # anti-collapse regularizer 
+        embed_std = features.std(dim=0).mean()
+        loss_collapse = -embed_std
+
         # Combine ArcFace with the throttled InfoNCE
         loss_identity = (loss_arc + lambda_infonce * loss_infonce) * id_weight
-                
-        total_loss = loss_spatial + loss_global + (loss_latent * latent_weight) + loss_identity
+
+        total_loss = loss_spatial + loss_global + (loss_latent * latent_weight) + loss_identity + (collapse_weight * loss_collapse)
         
         return total_loss, {
             'loss_ext_total': total_loss.item(), 
@@ -773,14 +805,19 @@ def save_checkpoint(state, path):
     print(f"    [ckpt] saved → {path}")
 
 def load_checkpoint(path, model, optimizer, scheduler, scaler):
+    
     ckpt = torch.load(path, map_location='cpu')
+    
     m = model.module if isinstance(model, DDP) else model
     m.load_state_dict(ckpt['model'])
+    
     optimizer.load_state_dict(ckpt['optimizer'])
     scheduler.load_state_dict(ckpt['scheduler'])
     scaler.load_state_dict(ckpt['scaler'])
+    
     print(f"    [ckpt] resumed from epoch {ckpt['epoch']} → {path}")
-    return ckpt['epoch'], ckpt['best_val_loss']
+    
+    return ckpt['epoch'], ckpt['best_val_loss'], ckpt
 
 # --------------------------
 #  TRAINING
@@ -890,8 +927,12 @@ def train_ddp(rank, world_size, config):
         {'params': head_params, 'lr': config['lr']}            
     ], weight_decay=config['weight_decay'])
 
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config['max_iterations'], eta_min=config['lr'] * 0.01)
-    scaler       = GradScaler(device='cuda')
+
+    # safenet for the plateaus
+    scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        optimizer,T_0=config.get('restart_interval', 20), T_mult=1, eta_min=config['lr'] * 0.01
+    )
+    scaler = GradScaler(device='cuda')
 
 
     start_epoch = 0
@@ -899,12 +940,11 @@ def train_ddp(rank, world_size, config):
     patience_ctr = 0
 
     if config.get('resume') and os.path.isfile(config['resume']):
-        start_epoch, _ = load_checkpoint(config['resume'], extractor, optimizer, scheduler, scaler)
-        
-        # ═════════════════════════════════════════════════════════════════
-        # [FIX] WIPE CORRUPTED HISTORY
-        # ═════════════════════════════════════════════════════════════════
-        best_val = float('inf')
+        start_epoch, prev_best, ckpt = load_checkpoint(config['resume'], extractor, optimizer, scheduler, scaler)
+        best_val = prev_best
+        patience_ctr = 0 
+        if 'ema_state' in ckpt:
+            ema_extractor.load_state_dict(ckpt['ema_state'])
 
     ckpt_dir       = config.get('checkpoint_dir', '/kaggle/working/checkpoints_ext_sc')
     best_model_dir = config.get('best_model_dir',  '/kaggle/working/best_model_ext_sc')
@@ -936,9 +976,6 @@ def train_ddp(rank, world_size, config):
     ).to(rank)
         
     for p in ema_extractor.parameters(): p.requires_grad = False 
-    
-    ema_extractor.load_state_dict(extractor.module.state_dict())
-    ema_extractor.eval()
 
     for itr in range(start_epoch, max_iterations):
         start_time = time.time()
@@ -998,51 +1035,57 @@ def train_ddp(rank, world_size, config):
                     sk_composite = ae.module.blend_skips(sko, skb, soft_masks)
                     wm_composite = ae.module.shared_decoder(z_composite, sk_composite)
 
-                    mode_weights = torch.tensor([0.3, 0.2, 0.2, 0.1, 0.2], device=rank)
+                    # ═══════════════════════════════════════════════════════════════════════
+                    # MODE SELECTION - Per-sample for better gradient diversity
+                    # ═══════════════════════════════════════════════════════════════════════
+                    mode_weights = get_mode_weights(itr, max_iterations).to(rank)
+
+                    # Option A: Per-batch mode (simple, your original approach)
                     attack_mode = torch.multinomial(mode_weights, 1).item()
+
+                    # Option B: Per-sample mode (better diversity - uncomment if desired)
+                    # attack_modes = torch.multinomial(mode_weights.repeat(B, 1), 1).squeeze(1)
 
                     gt_int  = torch.zeros(B, 1, 56, 56, device=rank)
                     gt_glob = torch.zeros(B, dtype=torch.long, device=rank)
-
-                    current_w1, current_w2 = base_w1, base_w2
+                    identity_ids = idx_base.clone()  # Default: use base watermark IDs
 
                     if attack_mode == 0:
-                        
+                        # Attacked watermark, no tampering
                         wm_attacked = attack_layer(wm_composite, itr, max_epochs=max_iterations)
-                        gt_glob[:] = 0.0
+                        gt_glob[:] = 0
 
                     elif attack_mode == 1:
-                        
+                        # Attacked + Tampered
                         base_attacked = attack_layer(wm_composite, itr, max_epochs=max_iterations)
                         wm_attacked, gt_int = tamper_layer(base_attacked)
                         gt_glob[:] = 1
-                    
+                        
                     elif attack_mode == 2:
-
-                        idx_fake1 = torch.randint(0, len(injector.fake_w1_pool),(B,),device=rank)
-                        idx_fake2 = torch.randint(0,len(injector.fake_w2_pool), (B,), device=rank)
-
-                        identity_ids = idx_fake1.clone()
-
+                        # Wrong/Fake watermark (identity confusion)
+                        idx_fake1 = torch.randint(0, len(injector.fake_w1_pool), (B,), device=rank)
+                        idx_fake2 = torch.randint(0, len(injector.fake_w2_pool), (B,), device=rank)
+                        
+                        identity_ids = idx_fake1.clone()  # Use fake IDs for identity loss
+                        
                         wrong_w1 = injector.fake_w1_pool[idx_fake1]
                         wrong_w2 = injector.fake_w2_pool[idx_fake2]
-                        
                         
                         wrong_z_obj = injector.inject(zo, wrong_w1, a_obj, mask_obj)
                         wrong_z_bg  = injector.inject(zb, wrong_w2, a_bg, mask_bg)
                         z_fake = wrong_z_obj * mask_latent + wrong_z_bg * (1 - mask_latent)
                         fake_composite = ae.module.shared_decoder(z_fake, sk_composite)
                         wm_attacked = attack_layer(fake_composite, itr, max_epochs=max_iterations)
-                        
                         gt_glob[:] = 2
-                        gt_int = torch.zeros(B, 1, 56, 56, device=rank)
-                        
+                        # gt_int stays zeros (no spatial tampering in this mode)
 
                     elif attack_mode == 3:
+                        # Clean watermark (no attack)
                         wm_attacked = wm_composite
                         gt_glob[:] = 0
 
                     elif attack_mode == 4:
+                        # No watermark at all (clean image)
                         wm_attacked = images
                         gt_glob[:] = 3
 
@@ -1070,30 +1113,39 @@ def train_ddp(rank, world_size, config):
                     shift_flat = shift_total.flatten(1)
                     gt_latent = F.normalize(shift_flat, dim=1).view_as(shift_total)
                     
+                    
+                    if rank == 0 and step == 0:
+                        print(f"  [DBG] mode={attack_mode} | gt_glob dist={torch.bincount(gt_glob, minlength=4)}")
+                        print(f"  [DBG] pred_glob dist={torch.bincount(pred_glob.argmax(1), minlength=4)}")
+                        print(f"  [DBG] shift mag={shift_total.abs().mean():.6f}")
+
+
+                    if rank == 0 and step == 0:
+                        print(f"  [DBG] mode={attack_mode} | shift mag={shift_total.abs().mean():.6f}")
+                    
                     pred_int, pred_glob, z_mean, z_logvar, pred_fp = extractor(wm_attacked)
                     
                     phase_2_start = int(0.50 * max_iterations)
-                    phase_3_start = int(0.75 * max_iterations)
-                    
-                    if itr < phase_2_start:
-                        # PHASE 1: Spatial & Global ONLY
-                        id_weight = 0.0
-                        latent_weight = 0.05
-                    
-                    elif itr < phase_3_start:
-                        # PHASE 2: Add ArcFace Metric Geometry
-                        id_weight = 1.0
-                        latent_weight = 0.05
-                    else:
-                        # PHASE 3: Continue with full weights
-                        id_weight = 1.0
-                        latent_weight = 0.05
-                        
-                    # Always zero out these weights if attack mode is 4 (no watermark)
+                    ramp_length = config.get('phase_2_ramp_length', 10)
+
+                    # Base weights from config
+                    base_id_weight = config.get('id_weight_max', 1.0)
+                    base_latent_weight = config['latent_weight']
+                    collapse_weight = config.get('collapse_weight', 0.1)
+
                     if attack_mode == 4:
+                        # No watermark case - disable identity and latent losses
                         id_weight = 0.0
                         latent_weight = 0.0
-                    # ════════════════════════════════════════════════════════════
+                    elif itr < phase_2_start:
+                        # Phase 1: Focus on spatial/global, light latent
+                        id_weight = 0.0
+                        latent_weight = base_latent_weight  # Reduced early on
+                    else:
+                        # Phase 2: Ramp up identity loss
+                        progress = min(1.0, (itr - phase_2_start) / ramp_length)
+                        id_weight = progress * base_id_weight
+                        latent_weight = base_latent_weight
 
 
                     loss, bd = criterion(
@@ -1101,7 +1153,8 @@ def train_ddp(rank, world_size, config):
                         z_logvar, gt_latent, pred_fp, identity_ids,
                         extractor.module, current_epoch=itr, 
                         latent_weight=latent_weight, id_weight=id_weight,
-                        max_epochs=max_iterations  # <-- ADD THIS LINE
+                        collapse_weight=collapse_weight,
+                        max_epochs=max_iterations
                     )
 
                     loss = loss / accum_steps
@@ -1175,20 +1228,24 @@ def train_ddp(rank, world_size, config):
                     sk_composite = ae.module.blend_skips(sko, skb, soft_masks)
                     wm_composite = ae.module.shared_decoder(z_composite, sk_composite)
 
-                    attack_mode = step % 5
+                    mode_weights = get_mode_weights(itr, max_iterations).to(rank)
+                    # Make it deterministic per-step but follow the same distribution
+                    attack_mode = torch.multinomial(
+                        mode_weights, 1, generator=torch.Generator(device=rank).manual_seed(step)
+                    ).item()
                     gt_int  = torch.zeros(B, 1, 56, 56, device=rank)
                     gt_glob = torch.zeros(B, dtype=torch.long, device=rank)
 
                     current_w1, current_w2 = base_w1, base_w2
 
                     if attack_mode == 0:
-                        wm_attacked = val_attack_layer(wm_composite, itr)
+                        wm_attacked = val_attack_layer(wm_composite, itr, max_epochs=max_iterations)
                         gt_glob[:] = 0
 
                     elif attack_mode == 1:
                         
                         
-                        wm_attacked, gt_int = tamper_layer(val_attack_layer(wm_composite, itr), seed=step)
+                        wm_attacked, gt_int = tamper_layer(val_attack_layer(wm_composite, itr, max_epochs=max_iterations), seed=step)
                         gt_glob[:] = 1
                     
                     elif attack_mode == 2:
@@ -1206,7 +1263,7 @@ def train_ddp(rank, world_size, config):
                         z_fake = wrong_z_obj * mask_latent + wrong_z_bg * (1 - mask_latent)
 
                         fake_composite = ae.module.shared_decoder(z_fake, sk_composite)
-                        wm_attacked = val_attack_layer(fake_composite, itr)
+                        wm_attacked = val_attack_layer(fake_composite, itr, max_epochs=max_iterations)
                         gt_glob[:] = 2
                         gt_int = torch.zeros(B, 1, 56, 56, device=rank)
 
@@ -1228,7 +1285,6 @@ def train_ddp(rank, world_size, config):
                         clean_obj, _ = ae.module.enc_obj(images * soft_masks)
                         clean_bg,  _ = ae.module.enc_bg(images * (1 - soft_masks))
 
-                    # [FIX 1] Clean Structural Distillation (No fake projections!)
                     norm_atk_obj = F.normalize(atk_z_obj, dim=1)
                     norm_cln_obj = F.normalize(clean_obj, dim=1)
                     shift_obj = norm_atk_obj - norm_cln_obj
@@ -1242,32 +1298,33 @@ def train_ddp(rank, world_size, config):
                     shift_flat = shift_total.flatten(1)
                     gt_latent = F.normalize(shift_flat, dim=1).view_as(shift_total)
 
-                    pred_int, pred_glob, z_mean, z_logvar, pred_fp = ema_extractor(wm_attacked)
+                    if rank == 0 and step == 0:
+                        print(f"  [DBG] mode={attack_mode} | gt_glob dist={torch.bincount(gt_glob, minlength=4)}")
+                        print(f"  [DBG] pred_glob dist={torch.bincount(pred_glob.argmax(1), minlength=4)}")
+                        print(f"  [DBG] shift mag={shift_total.abs().mean():.6f}")
+
+                    if rank == 0 and step == 0:
+                        print(f"  [VAL DBG] mode={attack_mode} | shift mag={shift_total.abs().mean():.6f}")
+
+                    eval_extractor = ema_extractor if itr >= 5 else extractor.module
+                    pred_int, pred_glob, z_mean, z_logvar, pred_fp = eval_extractor(wm_attacked)
 
                     
                     phase_2_start = int(0.50 * max_iterations)
-                    phase_3_start = int(0.75 * max_iterations)
+                    ramp_length = config.get('phase_2_ramp_length', 10)
                     
-                    if itr < phase_2_start:
-                        # PHASE 1: Spatial & Global ONLY
-                        id_weight = 0.0
-                        latent_weight = 0.05
-                    
-                    elif itr < phase_3_start:
-                        # PHASE 2: Add ArcFace Metric Geometry
-                        id_weight = 1.0
-                        latent_weight = 0.05
-                    else:
-                        # PHASE 3: Continue with full weights
-                        id_weight = 1.0
-                        latent_weight = 0.05
-                        
-                    # Always zero out these weights if attack mode is 4 (no watermark)
-                    if attack_mode == 4:
+                    # Before passing to criterion:
+                    if attack_mode == 4:  # No watermark case
                         id_weight = 0.0
                         latent_weight = 0.0
+                    elif itr < phase_2_start:
+                        id_weight = 0.0
+                        latent_weight = config['latent_weight']
+                    else:
+                        progress = min(1.0, (itr - phase_2_start) / ramp_length)
+                        id_weight = progress * config.get('id_weight_max', 1.0)
+                        latent_weight = config['latent_weight']
 
-                    # ════════════════════════════════════════════════════════════
 
 
                     val_step_loss, bd = criterion(
@@ -1275,7 +1332,8 @@ def train_ddp(rank, world_size, config):
                         z_mean, z_logvar, gt_latent, pred_fp,
                         identity_ids, ema_extractor, current_epoch=itr,
                         latent_weight=latent_weight, id_weight=id_weight,
-                        max_epochs=max_iterations  # <-- ADD THIS LINE
+                        collapse_weight=collapse_weight,
+                        max_epochs=max_iterations 
                     )
 
                 bs = images.size(0)
@@ -1286,11 +1344,7 @@ def train_ddp(rank, world_size, config):
         current_lr = optimizer.param_groups[0]['lr']
         scheduler.step()
 
-        if itr >= 40:
-            # param_groups[1] --> the head; param_groups[0] is the backbone
-            optimizer.param_groups[1]['lr'] = 5e-5
-            optimizer.param_groups[0]['lr'] = 5e-6
-            current_lr = optimizer.param_groups[1]['lr']
+        
             
         keys = ['loss_spatial', 'loss_global', 'loss_latent', 'loss_identity']
         metrics = torch.tensor(
@@ -1330,10 +1384,21 @@ def train_ddp(rank, world_size, config):
             phase_3_start = int(0.75 * max_iterations)
             
             # Dynamically reset whenever we cross into Phase 2 or Phase 3
+            # Optional: save a phase-transition checkpoint as a backup, but don't reset best_val
             if (itr) == phase_2_start or (itr) == phase_3_start:
-                print(f"    [!] Curriculum Shift Detected at Epoch {itr}. Resetting best_val.")
-                best_val = float('inf')
-                patience_ctr = 0
+                # Save a backup at the transition, but don't reset best_val
+                save_checkpoint({
+                    "epoch": itr+1,
+                    "model": extractor.module.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "scheduler": scheduler.state_dict(),
+                    "scaler": scaler.state_dict(),
+                    "best_val_loss": best_val,          # unchanged
+                    "config": config,
+                    "ema_state": ema_extractor.state_dict(),
+                }, os.path.join(ckpt_dir, f"phase_transition_{itr+1:03d}.pth"))
+                
+                patience_ctr = 0   # optional, reset early-stopping counter
 
             if g_v['total'] < best_val - min_delta:
                 
@@ -1348,6 +1413,7 @@ def train_ddp(rank, world_size, config):
                     "scheduler": scheduler.state_dict(),
                     "scaler": scaler.state_dict(),
                     "best_val_loss": best_val, "config": config,
+                    "ema_state": ema_extractor.state_dict(),
                 }, os.path.join(ckpt_dir, "best_model.pth"))
                 
                 torch.save(extractor.module.state_dict(), os.path.join(best_model_dir, "best_weights.pth"))
@@ -1375,6 +1441,7 @@ def train_ddp(rank, world_size, config):
                     "scheduler": scheduler.state_dict(),
                     "scaler": scaler.state_dict(),
                     "best_val_loss": best_val, "config": config,
+                    "ema_state": ema_extractor.state_dict()
                 }, os.path.join(ckpt_dir, f"epoch_{itr+1:03d}.pth"))
 
         # ═════════════════════════════════════════════════════════════════
@@ -1417,6 +1484,7 @@ def train_ddp(rank, world_size, config):
             "epoch": max_iterations, "model": extractor.module.state_dict(),
             "optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict(),
             "scaler": scaler.state_dict(), "best_val_loss": best_val, "config": config,
+            "ema_state": ema_extractor.state_dict(),
         }, os.path.join(ckpt_dir, "final_checkpoint.pth"))
 
     dist.destroy_process_group()

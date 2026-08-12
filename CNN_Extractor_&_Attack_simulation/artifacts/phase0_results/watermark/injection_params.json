@@ -1,0 +1,6 @@
+{
+  "alpha": 0.225,
+  "seed": 42,
+  "embedding_method": "tanh additive with semantic gain control",
+  "recovery_method": "Stage 2 VAE extract_watermark(image) > 0"
+}

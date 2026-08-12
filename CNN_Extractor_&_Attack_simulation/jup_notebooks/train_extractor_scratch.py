@@ -842,7 +842,12 @@ def train_ddp(rank, world_size, config):
     criterion = ForensicInfoNCELoss(temperature=0.1).to(rank)
 
     optimizer = optim.AdamW(extractor.module.parameters(), lr=config['lr'], weight_decay=config['weight_decay'])
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config['max_iterations'], eta_min=config['lr'] * 0.01)
+    
+    # safenet for the plateaus
+    scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        optimizer,T_0=config.get('restart_interval', 20), T_mult=1, eta_min=config['lr'] * 0.01
+    )
+    
     scaler       = GradScaler(device='cuda')
 
 
@@ -1027,24 +1032,23 @@ def train_ddp(rank, world_size, config):
                     # [PHASE CONTROLLER] LOSS WEIGHT CURRICULUM
                     # ════════════════════════════════════════════════════════════
                     
+                                        # ---------------------------------------------------------
+                    # [FINAL FIX] Latent & Identity Curriculum Weights
+                    # ---------------------------------------------------------
                     if itr < 40:
-                        # PHASE 1: Spatial & Global ONLY
                         id_weight = 0.0
                         latent_weight = 0.0
-                    
-                    elif itr < 60:
-                        id_weight = 1.0
+                    elif itr < 50:
+                        # Smoothly ramp up identity weight over 10 epochs
+                        id_weight = (itr - 40) / 10.0  
                         latent_weight = 0.05
                     else:
                         id_weight = 1.0
                         latent_weight = 0.05
                         
-                    # Always zero out these weights if attack mode is 4 (no watermark)
                     if attack_mode == 4:
                         id_weight = 0.0
                         latent_weight = 0.0
-                    # ════════════════════════════════════════════════════════════
-
 
                     loss, bd = criterion(
                         pred_int, gt_int, pred_glob, gt_glob, z_mean,
@@ -1243,14 +1247,10 @@ def train_ddp(rank, world_size, config):
                 for k in bd: val_bd[k] += bd[k] * bs
 
         current_lr = optimizer.param_groups[0]['lr']
+        prev_lr = current_lr
         scheduler.step()
 
-        if itr >= 40:
-            # param_groups[1] --> the head; param_groups[0] is the backbone
-            optimizer.param_groups[1]['lr'] = 5e-5 # head is good
-            optimizer.param_groups[0]['lr'] = 5e-6 # backbone slow
-            current_lr = optimizer.param_groups[1]['lr']
-
+        
         keys = ['loss_spatial', 'loss_global', 'loss_latent', 'loss_identity']
         metrics = torch.tensor(
             [train_loss] + [train_bd[k] for k in keys] + [float(train_n),

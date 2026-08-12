@@ -1,0 +1,55 @@
+=========================================
+ PHASE 0: LATENT VERIFICATION REPORT
+=========================================
+
+--- TIMING ---
+Encoder: 0.4039s
+Injection: 0.0219s
+Decoder: 0.0123s
+Recovery: 0.0203s
+Total: 5.8744s
+
+--- RECONSTRUCTION FIDELITY ---
+PSNR: 85.9349
+SSIM: 1.0000
+LPIPS: 0.0000
+L1: 0.0000
+MSE: 0.0000
+
+--- WATERMARK RECOVERY ---
+BER: 0.4976
+Bit Accuracy: 0.5024
+FPR: 0.5073
+FNR: 0.4901
+Cosine Sim: -0.0023
+Correlation: -0.0012
+Recovery Method: Passed watermarked image through Stage 2 'extract_watermark' CNN. Predicted bits where pred > 0.
+
+--- LATENT ANALYSIS ---
+Energy Ratio: 1.0023
+L1 Norm: 2600.6045
+L2 Norm: 5.9086
+Max Mag: 0.0326
+Mean Clean: -0.0039
+Var Clean: 0.0648
+Mean WM: -0.0023
+Var WM: 0.0649
+
+--- NOISE ROBUSTNESS ---
+ImageNoise_sig1_BER: 0.4976
+ImageNoise_sig2_BER: 0.4978
+ImageNoise_sig5_BER: 0.4978
+LatentNoise_scale0.0001_BER: 0.4976
+LatentNoise_scale0.001_BER: 0.4976
+LatentNoise_scale0.01_BER: 0.4976
+FP16_Truncation_BER: 0.4976
+
+--- CHANNEL ABLATION (BER) ---
+Group_0_(0-31)_BER: 0.4976
+Group_1_(32-63)_BER: 0.4976
+Group_2_(64-95)_BER: 0.4976
+Group_3_(96-127)_BER: 0.4976
+Group_4_(128-159)_BER: 0.4976
+Group_5_(160-191)_BER: 0.4976
+Group_6_(192-223)_BER: 0.4976
+Group_7_(224-255)_BER: 0.4976
