@@ -625,7 +625,7 @@ def generate_masks(weights_path, img_dir, out_mask_dir, img_size=224, threshold=
     Usage:
         generate_masks(
             weights_path = '/kaggle/working/best_model_unet/best_weights.pth',
-            img_dir      = '/kaggle/input/oxford-iiit-pet/images',
+            img_dir      = '/kaggle/working/images',
             out_mask_dir = '/kaggle/working/generated_masks',
         )
     """
@@ -717,8 +717,8 @@ if __name__ == '__main__':
     mp.spawn(train_ddp, args=(world_size, config), nprocs=world_size, join=True)
     
 
-    # config.setdefault('images_dir',     '/kaggle/input/oxford-iiit-pet/images')
-    # config.setdefault('mask_dir',       '/kaggle/input/oxford-iiit-pet/annotations/trimaps')
+    # config.setdefault('images_dir',     '/kaggle/working/images')
+    # config.setdefault('mask_dir',       '/kaggle/working/annotations/trimaps')
     # config.setdefault('checkpoint_dir', '/kaggle/working/checkpoints_unet')
     # config.setdefault('best_model_dir', '/kaggle/working/best_model_unet')
 
@@ -753,6 +753,6 @@ if __name__ == '__main__':
     #
     # generate_masks(
     #     weights_path = '/kaggle/working/best_model_unet/best_weights.pth',
-    #     img_dir      = '/kaggle/input/oxford-iiit-pet/images',
+    #     img_dir      = '/kaggle/working/images',
     #     out_mask_dir = '/kaggle/working/generated_masks',
     # )
