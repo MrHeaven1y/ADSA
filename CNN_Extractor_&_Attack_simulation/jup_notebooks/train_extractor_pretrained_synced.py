@@ -1,9 +1,26 @@
 """
-CNN Watermark Extractor — From Scratch  (Stage 3b)
-====================================================
-Custom CNN backbone trained entirely from scratch.
-Fully corrected architecture with dynamic identity pools,
-spectral supervision, and robust forensic heads.
+==============================================================================
+PHASE 3: CHAOTIC WATERMARK POOL & ATTACK SIMULATION
+==============================================================================
+Welcome to Phase 3 of the AVIB pipeline! (Section III.C and IV.C in the paper).
+
+What happens here?
+Now that Phase 2 has compressed the image into a 'latent bottleneck', we inject 
+the secret watermark. But we don't just use a random watermark. We use a 
+"Coupled Chaotic Watermark Pool". 
+
+Think of it like a highly secure, mathematically scrambled lock based on SHA-512. 
+It creates 256 unique watermarks. We inject one into the Foreground (the dog) 
+and one into the Background (the park). 
+
+Why? Because if a hacker tries to crop the dog out of the park and paste it 
+somewhere else (a Multi-Image Collusion Attack), we can still extract the 
+watermark from JUST the dog, or JUST the park!
+
+We also have an "Attack Simulation Layer" (Section IV.D). While the network is 
+training, we intentionally try to destroy our own watermarks by adding blur, 
+JPEG compression, and noise. This forces the Extractor network to learn how to 
+recover the watermark even if the image goes through WhatsApp or Instagram filters!
 """
 
 import os

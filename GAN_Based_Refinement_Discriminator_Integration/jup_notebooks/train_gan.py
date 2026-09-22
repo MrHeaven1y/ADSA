@@ -1,6 +1,27 @@
 """
-Stage 4: GAN Adversarial Training (Complete with all features)
-AE learns to hide watermark. D learns to detect it. E learns to extract despite D.
+==============================================================================
+PHASE 4: GENERATIVE RESTORATION & DUAL VERIFICATION (GAN)
+==============================================================================
+Welcome to Phase 4, the final stage! (Section IV.D in the paper).
+
+What happens here?
+Now we put everything together into a massive Generative Adversarial Network (GAN).
+It's a game of cops and robbers!
+
+1. The "Robber" (Generative Autoencoder from Phase 2): Tries to hide the watermark 
+   inside the image so perfectly that it's invisible to the human eye, even if the 
+   image is later blurred or compressed (Generative Restoration).
+   
+2. The "Cop" (Adversarial Discriminator): A separate network (PatchD) that looks at 
+   the image and tries to guess: "Is this a real, clean photo, or is it a fake 
+   photo with a hidden watermark?"
+
+3. The "Detective" (Forensic Extractor from Phase 3): Tries to pull the watermark 
+   back out of the image, even while the Robber is trying to hide it from the Cop!
+
+By training all three of these together, the watermark becomes incredibly stealthy 
+(fooling the Cop) but still perfectly readable (for the Detective). This is the 
+Dual Verification process!
 """
 
 import os, json, time, datetime, torch, hashlib, random

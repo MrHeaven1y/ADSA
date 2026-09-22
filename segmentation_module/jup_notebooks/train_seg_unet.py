@@ -1,23 +1,25 @@
 """
-UNet Segmentation Training  —  Stage 1
-========================================
-Trains a UNet to predict binary foreground masks from images.
-Output masks are saved to disk and used by the DualAutoencoder (Stage 2)
-to split images into object and background streams.
+==============================================================================
+PHASE 1: SEMANTIC DISENTANGLEMENT & CONTINUOUS SALIENCY (U-Net)
+==============================================================================
+Welcome to Phase 1 of the Adversarial Variational Information Bottleneck (AVIB) pipeline!
 
-Pipeline position:
-    [This file] → masks on disk → train_ae_clean.py (DualAutoencoder)
+According to Section IV.A of the paper, this script acts as our "Automated U-Net Backbone".
+What does that mean? 
+Imagine an image of a dog in a park. If we hide a watermark in the entire picture,
+the watermark might get distorted or break the edge of the dog. 
 
-Usage:
-    1. Run this to train the segmentor.
-    2. Run inference separately to generate and save masks for all images.
-    3. Feed saved masks into train_ae_clean.py.
+To fix this, this U-Net acts like a smart pair of scissors. It looks at an image and 
+"segments" (cuts out) the main object (the dog, or 'Foreground') from the rest of the 
+scene ('Background Context'). 
 
-Loss: BCE (0.4) + Dice (0.4) + KL Divergence (0.2)
-    - BCE  : per-pixel binary cross-entropy
-    - Dice : overlap-based, handles class imbalance (background >> foreground)
-    - KL   : distribution-level penalty — pushes predicted probabilities to be
-             well-calibrated, not just locally correct
+By doing this first, Phase 2 can watermark the dog and the park completely separately!
+
+Loss Functions Used Here:
+    - BCE (0.4) : Binary Cross Entropy. Standard pixel-by-pixel checking if it got the mask right.
+    - Dice (0.4): Overlap checking. Helps a lot when the object is very small compared to the background.
+    - KL (0.2)  : Kullback-Leibler Divergence. A math trick to ensure the network is 'confident' 
+                  about its boundaries, not just guessing, which creates smoother cutouts.
 """
 
 import os
